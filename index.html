@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, minimum-scale=1.0">
+    <title>Principais Notícias Globais Agora</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style>
+        body {
+            background-color: #000000;
+            color: #ffffff;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            -webkit-text-size-adjust: 100%;
+            -webkit-font-smoothing: antialiased;
+            text-rendering: optimizeLegibility;
+        }
+        .ai-card {
+            background: linear-gradient(180deg, #121212 0%, #050505 100%);
+            border: 1px solid #262626;
+            transition: border-color 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1), background 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            will-change: transform, border-color;
+            transform: translateZ(0);
+        }
+        .ai-card:hover {
+            border-color: #525252;
+            background: linear-gradient(180deg, #181818 0%, #0a0a0a 100%);
+            box-shadow: 0 4px 24px rgba(255, 255, 255, 0.05);
+        }
+        @media (hover: none) {
+            .ai-card:hover {
+                border-color: #262626;
+                box-shadow: none;
+            }
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in {
+            animation: fadeIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col justify-between antialiased selection:bg-white selection:text-black">
+
+    <!-- Container Principal -->
+    <main class="w-full max-w-4xl mx-auto px-3 sm:px-6 md:px-8 py-6 sm:py-10 flex-grow">
+        
+        <!-- Indicador de Carregamento Monocromático Otimizado -->
+        <div id="loading" class="flex flex-col items-center justify-center py-16 space-y-4">
+            <div class="relative">
+                <div class="w-12 h-12 rounded-full border-2 border-white/10"></div>
+                <div class="w-12 h-12 rounded-full border-2 border-white border-t-transparent animate-spin absolute inset-0"></div>
+            </div>
+            <p id="loadingText" class="text-xs sm:text-sm font-medium text-neutral-400 tracking-wide text-center px-4 transition-all duration-300">Detectando localidade...</p>
+        </div>
+
+        <!-- Grid de Cards de Países -->
+        <div id="countriesContainer" class="grid grid-cols-1 gap-4 sm:gap-6">
+            <!-- Cards gerados dinamicamente -->
+        </div>
+
+    </main>
+
+    <script>
+        const loading = document.getElementById('loading');
+        const loadingText = document.getElementById('loadingText');
+        const countriesContainer = document.getElementById('countriesContainer');
+
+        const apiKey = "";
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+
+        const userLanguage = navigator.language || navigator.userLanguage || (navigator.languages && navigator.languages[0]) || 'pt-BR';
+        const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
+        let exactUserDateTime = "";
+        let detectedUserLocation = "";
+
+        function getLiveTimestamp() {
+            const nowOptions = { timeZone: userTimeZone, dateStyle: 'full', timeStyle: 'long' };
+            return new Intl.DateTimeFormat(userLanguage, nowOptions).format(new Date());
+        }
+
+        const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+        async function displayStandardError(targetElement) {
+            targetElement.innerHTML = `<span class="text-neutral-300 font-medium">Aconteceu um erro</span>`;
+            await sleep(1000);
+            targetElement.innerHTML = `<span class="text-neutral-400 font-medium">Verifique o funcionamento da internet e recarregue a página</span>`;
+        }
+
+        function base64ToArrayBuffer(base64) {
+            const binaryString = atob(base64);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
+        function pcmToWav(pcm16, sampleRate) {
+            const numChannels = 1;
+            const byteRate = sampleRate * numChannels * 2;
+            const blockAlign = numChannels * 2;
+            const dataSize = pcm16.length * 2;
+            const buffer = new ArrayBuffer(44 + dataSize);
+            const view = new DataView(buffer);
+
+            function writeString(view, offset, string) {
+                for (let i = 0; i < string.length; i++) {
+                    view.setUint8(offset + i, string.charCodeAt(i));
+                }
+            }
+
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + dataSize, true);
+            writeString(view, 8, 'WAVE');
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, numChannels, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, byteRate, true);
+            view.setUint16(32, blockAlign, true);
+            view.setUint16(34, 16, true);
+            writeString(view, 36, 'data');
+            view.setUint32(40, dataSize, true);
+
+            let offset = 44;
+            for (let i = 0; i < pcm16.length; i++, offset += 2) {
+                view.setInt16(offset, pcm16[i], true);
+            }
+
+            return new Blob([view], { type: 'audio/wav' });
+        }
+
+        // Mapa estático de bandeiras em SVG
+        const flagSvgMap = {
+            'estadosunidos': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover" viewBox="0 0 1900 1000"><rect width="1900" height="1000" fill="#b22234"/><path d="M0,0h1900v76.9h-1900z M0,153.8h1900v76.9h-1900z M0,307.7H1900v76.9H0z M0,461.5H1900v76.9H0z M0,615.4H1900v76.9H0z M0,769.2H1900v76.9H0z M0,923.1H1900v76.9H0z" fill="#fff"/><rect width="760" height="538.5" fill="#3c3b6e"/></svg>`,
+            'china': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover" viewBox="0 0 900 600"><rect width="900" height="600" fill="#ee1c25"/><polygon points="150,60 179,150 255,95 208,181 297,210 208,239 255,325 179,270 150,360 121,270 45,325 92,239 3,210 92,181 45,95 121,150" fill="#ffde00"/></svg>`,
+            'japao': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover border border-neutral-700" viewBox="0 0 900 600"><rect width="900" height="600" fill="#fff"/><circle cx="450" cy="300" r="180" fill="#bc002d"/></svg>`,
+            'coreiadosul': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover border border-neutral-700" viewBox="0 0 72 48" fill="none"><rect width="72" height="48" fill="white"/><g transform="translate(36,24) rotate(-33.69)"><path d="M 0,-12 A 12 12 0 0 1 0,12 A 6 6 0 0 1 0,0 A 6 6 0 0 0 0,-12" fill="#CD2E3A"/><path d="M 0,12 A 12 12 0 0 1 0,-12 A 6 6 0 0 1 0,0 A 6 6 0 0 0 0,12" fill="#0047A0"/></g><g stroke="#111" stroke-width="1.5"><line x1="14" y1="11" x2="22" y2="6"/><line x1="16" y1="14" x2="24" y2="9"/><line x1="18" y1="17" x2="26" y2="12"/><line x1="46" y1="36" x2="50" y2="33.5"/><line x1="52" y1="32" x2="56" y2="29.5"/><line x1="48" y1="39" x2="52" y2="36.5"/><line x1="54" y1="35" x2="58" y2="32.5"/><line x1="50" y1="42" x2="54" y2="39.5"/><line x1="56" y1="38" x2="60" y2="35.5"/><line x1="50" y1="6" x2="58" y2="11"/><line x1="48" y1="9" x2="52" y2="11.5"/><line x1="54" y1="12.7" x2="56" y2="14"/><line x1="46" y1="12" x2="54" y2="17"/><line x1="18" y1="36" x2="26" y2="41"/><line x1="18" y1="33" x2="20" y2="34.2"/><line x1="22" y1="35.5" x2="24" y2="36.7"/><line x1="14" y1="30" x2="22" y2="35"/></g></svg>`,
+            'alemanha': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover" viewBox="0 0 5 3"><rect width="5" height="3" fill="#000"/><rect y="1" width="5" height="1" fill="#D00"/><rect y="2" width="5" height="1" fill="#FFCE00"/></svg>`,
+            'india': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover" viewBox="0 0 900 600"><rect width="900" height="200" fill="#ff9933"/><rect y="200" width="900" height="200" fill="#fff"/><rect y="400" width="900" height="200" fill="#138808"/><circle cx="450" cy="300" r="40" fill="none" stroke="#000080" stroke-width="6"/></svg>`,
+            'reinounido': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover" viewBox="0 0 60 30"><rect width="60" height="30" fill="#012169"/><path d="M0,0 L60,30 M60,0 L0,30" stroke="#fff" stroke-width="6"/><path d="M0,0 L60,30 M60,0 L0,30" stroke="#C8102E" stroke-width="4"/><path d="M30,0 v30 M0,15 h60" stroke="#fff" stroke-width="10"/><path d="M30,0 v30 M0,15 h60" stroke="#C8102E" stroke-width="6"/></svg>`,
+            'franca': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover" viewBox="0 0 900 600"><rect width="300" height="600" fill="#0055a5"/><rect x="300" width="300" height="600" fill="#fff"/><rect x="600" width="300" height="600" fill="#ef4135"/></svg>`,
+            'brasil': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover" viewBox="0 0 1000 700"><rect width="1000" height="700" fill="#009b3a"/><polygon points="500,50 950,350 500,650 50,350" fill="#fedf00"/><circle cx="500" cy="350" r="175" fill="#002776"/></svg>`,
+            'italia': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover" viewBox="0 0 3 2"><rect width="1" height="2" fill="#009246"/><rect x="1" width="1" height="2" fill="#fff"/><rect x="2" width="1" height="2" fill="#ce2b37"/></svg>`,
+            'canada': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover" viewBox="0 0 2 1"><rect width="2" height="1" fill="#ff0000"/><rect x="0.5" width="1" height="1" fill="#fff"/></svg>`,
+            'russia': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover border border-neutral-700" viewBox="0 0 9 6"><rect width="9" height="2" fill="#fff"/><rect y="2" width="9" height="2" fill="#0039a6"/><rect y="4" width="9" height="2" fill="#d52b1e"/></svg>`,
+            'mexico': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover" viewBox="0 0 3 2"><rect width="1" height="2" fill="#006341"/><rect x="1" width="1" height="2" fill="#fff"/><rect x="2" width="1" height="2" fill="#ce1126"/></svg>`,
+            'australia': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover" viewBox="0 0 2 1"><rect width="2" height="1" fill="#012169"/><path d="M0,0 h1 v0.5 h-1 z" fill="#012169"/><path d="M0,0 L1,0.5 M1,0 L0,0.5" stroke="#fff" stroke-width="0.08"/><path d="M0.5,0 v0.5 M0,0.25 h1" stroke="#fff" stroke-width="0.12"/><path d="M0.5,0 v0.5 M0,0.25 h1" stroke="#C8102E" stroke-width="0.08"/><circle cx="1.5" cy="0.7" r="0.05" fill="#fff"/><circle cx="1.3" cy="0.3" r="0.04" fill="#fff"/><circle cx="1.7" cy="0.3" r="0.04" fill="#fff"/></svg>`,
+            'espanha': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover" viewBox="0 0 750 500"><rect width="750" height="500" fill="#aa151b"/><rect y="125" width="750" height="250" fill="#f1bf00"/></svg>`,
+            'argentina': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover" viewBox="0 0 900 600"><rect width="900" height="600" fill="#74acdf"/><rect y="200" width="900" height="200" fill="#fff"/><circle cx="450" cy="300" r="35" fill="#f6b40e"/></svg>`,
+            'suica': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover" viewBox="0 0 32 32"><rect width="32" height="32" fill="#FF0000"/><rect x="13" y="6" width="6" height="20" fill="#FFF"/><rect x="6" y="13" width="20" height="6" fill="#FFF"/></svg>`,
+            'suecia': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover" viewBox="0 0 16 10"><rect width="16" height="10" fill="#006aa7"/><rect x="5" y="0" width="2" height="10" fill="#fecc00"/><rect x="0" y="4" width="16" height="2" fill="#fecc00"/></svg>`,
+            'paisesbaixos': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover" viewBox="0 0 9 6"><rect width="9" height="2" fill="#21468B"/><rect y="2" width="9" height="2" fill="#FFF"/><rect y="4" width="9" height="2" fill="#AE1C28"/></svg>`,
+            'turquia': `<svg class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 object-cover" viewBox="0 0 1200 800"><rect width="1200" height="800" fill="#E30A17"/><circle cx="425" cy="400" r="200" fill="#fff"/><circle cx="475" cy="400" r="160" fill="#E30A17"/><polygon points="700,400 600,430 630,330 560,390 650,420" fill="#fff"/></svg>`
+        };
+
+        function getCountryFlagSvg(countryName) {
+            const key = countryName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, '');
+            for (const mapKey in flagSvgMap) {
+                if (key.includes(mapKey)) {
+                    return flagSvgMap[mapKey];
+                }
+            }
+            let initials = "GV";
+            const words = countryName.trim().split(/\s+/);
+            if (words.length > 1) {
+                initials = (words[0][0] + words[1][0]).toUpperCase();
+            } else if (countryName.length >= 2) {
+                initials = countryName.substring(0, 2).toUpperCase();
+            }
+            return `<div class="w-7 h-5 rounded-sm shadow-sm flex-shrink-0 bg-gradient-to-br from-neutral-800 to-black border border-neutral-700 flex items-center justify-center text-[10px] text-white font-bold tracking-tighter">${initials}</div>`;
+        }
+
+        async function fetchWithRetry(url, options, retries = 2, delayMs = 1000) {
+            for (let i = 0; i <= retries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (response.ok) return response;
+                    if (i === retries) throw new Error(`HTTP Error: ${response.status}`);
+                } catch (err) {
+                    if (i === retries) throw err;
+                    await sleep(delayMs);
+                }
+            }
+        }
+
+        async function initializeApplicationData() {
+            try {
+                loadingText.textContent = "Detectando localidade...";
+                await sleep(1000);
+
+                detectedUserLocation = userTimeZone.replace('_', ' ');
+                loadingText.textContent = `Localidade: ${detectedUserLocation}`;
+                await sleep(1000);
+
+                loadingText.textContent = "Detectando data e hora...";
+                await sleep(1000);
+
+                exactUserDateTime = getLiveTimestamp();
+                loadingText.textContent = exactUserDateTime;
+                await sleep(1000);
+
+                const systemPromptCountries = `Você é um geógrafo e analista de dados globais operando em tempo real no exato momento '${getLiveTimestamp()}'. Retorne um JSON contendo um array 'countries' com a lista completa de todos os países soberanos reconhecidos do mundo, ordenados estritamente por PIB atualizado, traduzidos para o idioma '${userLanguage}'.`;
+                const userQueryCountries = `lista de todos os países do mundo ordenada por PIB em tempo real em ${getLiveTimestamp()}`;
+
+                const countriesPayload = {
+                    contents: [{ parts: [{ text: userQueryCountries }] }],
+                    tools: [{ "google_search": {} }],
+                    systemInstruction: { parts: [{ text: systemPromptCountries }] },
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: "OBJECT",
+                            properties: {
+                                countries: {
+                                    type: "ARRAY",
+                                    items: { type: "STRING" }
+                                }
+                            },
+                            propertyOrdering: ["countries"]
+                        }
+                    }
+                };
+
+                const response = await fetchWithRetry(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(countriesPayload)
+                });
+
+                const result = await response.json();
+                const candidate = result.candidates?.[0];
+                let countryList = [
+                    "Estados Unidos", "China", "Alemanha", "Japão", "Índia", "Reino Unido", "França", "Brasil", "Itália", "Canadá",
+                    "Rússia", "México", "Austrália", "Coreia do Sul", "Espanha", "Indonésia", "Países Baixos", "Arábia Saudita", "Turquia", "Suíça"
+                ];
+
+                if (candidate && candidate.content?.parts?.[0]?.text) {
+                    const parsed = JSON.parse(candidate.content.parts[0].text);
+                    if (parsed.countries && parsed.countries.length > 0) {
+                        countryList = parsed.countries;
+                    }
+                }
+
+                loading.classList.add('hidden');
+
+                for (let i = 0; i < countryList.length; i++) {
+                    await fetchAndRenderCountry(countryList[i], i + 1);
+                }
+
+            } catch (error) {
+                console.error(error);
+                await displayStandardError(loadingText);
+            }
+        }
+
+        async function fetchAndRenderCountry(countryName, rank) {
+            const cardId = `country-card-${rank}`;
+            const cardDiv = document.createElement('div');
+            cardDiv.id = cardId;
+            cardDiv.className = "ai-card rounded-2xl p-4 sm:p-6 shadow-xl border border-neutral-800 bg-gradient-to-b from-neutral-900 to-black animate-fade-in";
+            cardDiv.innerHTML = `
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <div class="flex-shrink-0 flex items-center">${getCountryFlagSvg(countryName)}</div>
+                        <span class="font-bold text-white text-sm sm:text-base tracking-wider truncate max-w-[180px] sm:max-w-none">${countryName.toUpperCase()}</span>
+                    </div>
+                    <div class="card-status flex items-center space-x-2 text-xs text-neutral-400">
+                        <div class="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <span class="font-medium tracking-wide hidden sm:inline text-neutral-300">Pesquisando fato mais popular agora...</span>
+                    </div>
+                </div>
+            `;
+            countriesContainer.appendChild(cardDiv);
+
+            try {
+                const currentRealtimeMoment = getLiveTimestamp();
+                const specificQuery = `fato mais popular em ${countryName} em ${currentRealtimeMoment}`;
+
+                const systemPromptAI = `Você é um motor de pesquisa de notícias e atualidades em tempo real de altíssima precisão. O usuário está localizado em '${detectedUserLocation}' (${userTimeZone}), com o carimbo de data e hora em tempo real: '${currentRealtimeMoment}' e idioma '${userLanguage}'. A pesquisa obrigatória a ser executada é: '${specificQuery}'. Retorne estritamente um JSON contendo: 'summary' (resumo de uma frase sobre o fato mais popular atual), 'paragraph' (parágrafo detalhado com palavras-chave em destaque) e 'topics' (array com objetos 'title' e 'description' sobre subtópicos recentes). Idioma: '${userLanguage}'.`;
+
+                const aiPayload = {
+                    contents: [{ parts: [{ text: specificQuery }] }],
+                    tools: [{ "google_search": {} }],
+                    systemInstruction: { parts: [{ text: systemPromptAI }] },
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: "OBJECT",
+                            properties: {
+                                summary: { type: "STRING" },
+                                paragraph: { type: "STRING" },
+                                topics: {
+                                    type: "ARRAY",
+                                    items: {
+                                        type: "OBJECT",
+                                        properties: {
+                                            title: { type: "STRING" },
+                                            description: { type: "STRING" }
+                                        },
+                                        propertyOrdering: ["title", "description"]
+                                    }
+                                }
+                            },
+                            propertyOrdering: ["summary", "paragraph", "topics"]
+                        }
+                    }
+                };
+
+                const aiResponse = await fetchWithRetry(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(aiPayload)
+                });
+
+                const aiResult = await aiResponse.json();
+                const aiCandidate = aiResult.candidates?.[0];
+
+                if (aiCandidate && aiCandidate.content?.parts?.[0]?.text) {
+                    const data = JSON.parse(aiCandidate.content.parts[0].text);
+
+                    const formatText = (text) => {
+                        if (!text) return '';
+                        return text
+                            .replace(/\*\*(.*?)\*\*/g, '<strong class="text-white font-bold">$1</strong>')
+                            .replace(/\*(.*?)\*/g, '<em class="not-italic text-neutral-300">$1</em>');
+                    };
+
+                    const cleanSummary = formatText(data.summary);
+                    const cleanParagraph = formatText(data.paragraph);
+                    const lastGeneratedText = `${data.paragraph} ${data.topics.map(t => t.title + ' ' + t.description).join(' ')}`.replace(/\*\*/g, '');
+
+                    let sources = [];
+                    const groundingMetadata = aiCandidate.groundingMetadata;
+                    if (groundingMetadata && groundingMetadata.groundingAttributions) {
+                        sources = groundingMetadata.groundingAttributions
+                            .map(attr => ({
+                                uri: attr.web?.uri,
+                                title: attr.web?.title
+                            }))
+                            .filter(s => s.uri && s.title);
+                    }
+
+                    let sourcesHtml = `<span class="text-neutral-400 font-medium">Fontes:</span>`;
+                    if (sources.length > 0) {
+                        sources.slice(0, 2).forEach(src => {
+                            const domain = new URL(src.uri).hostname.replace('www.', '');
+                            sourcesHtml += `<a href="${src.uri}" target="_blank" rel="noopener noreferrer" class="bg-black hover:bg-neutral-800 border border-neutral-700 px-3 py-1 rounded-md text-white transition-colors flex items-center space-x-1" onclick="event.stopPropagation()"><span>${domain}</span></a>`;
+                        });
+                    } else {
+                        sourcesHtml += `<span class="text-neutral-400">Google Search Grounding</span>`;
+                    }
+
+                    cardDiv.className = "ai-card rounded-2xl p-4 sm:p-6 shadow-xl cursor-pointer transition-all duration-300 hover:border-neutral-500 select-none animate-fade-in";
+                    cardDiv.innerHTML = `
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center space-x-3">
+                                <div class="flex-shrink-0 flex items-center">${getCountryFlagSvg(countryName)}</div>
+                                <span class="font-bold text-white text-sm sm:text-base tracking-wider truncate max-w-[180px] sm:max-w-none">${countryName.toUpperCase()}</span>
+                            </div>
+                            <div class="flex items-center space-x-2 sm:space-x-3">
+                                <button class="tts-btn p-2 hover:bg-neutral-800 rounded-full text-white transition-colors cursor-pointer hidden touch-manipulation" title="Ouvir Resumo" data-text="${encodeURIComponent(lastGeneratedText)}">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"></path>
+                                    </svg>
+                                </button>
+                                <svg class="chevron-icon w-5 h-5 text-neutral-400 transition-transform duration-300 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                </svg>
+                            </div>
+                        </div>
+
+                        <div class="short-summary mt-3 text-neutral-300 text-sm sm:text-base leading-relaxed">
+                            ${cleanSummary}
+                        </div>
+
+                        <div class="expanded-content hidden mt-5 pt-5 border-t border-neutral-800 space-y-4">
+                            <div class="flex items-center space-x-2">
+                                <span class="text-xs uppercase tracking-widest text-white font-bold">Visão geral criada por IA</span>
+                            </div>
+                            
+                            <div class="space-y-4 text-neutral-300 text-sm sm:text-base leading-relaxed">
+                                <p class="text-neutral-200 leading-relaxed">${cleanParagraph}</p>
+                                <ul class="space-y-3.5 mt-4">
+                                    ${data.topics.map(t => `
+                                        <li class="flex items-start space-x-3">
+                                            <span class="inline-block w-1.5 h-1.5 rounded-full bg-white mt-2 shrink-0"></span>
+                                            <div class="leading-relaxed">
+                                                <strong class="text-white font-bold">${formatText(t.title)}</strong> 
+                                                <span class="text-neutral-300">${formatText(t.description)}</span>
+                                            </div>
+                                        </li>
+                                    `).join('')}
+                                </ul>
+                            </div>
+
+                            <div class="mt-6 pt-4 border-t border-neutral-800 flex flex-wrap items-center justify-between gap-3 text-xs text-neutral-400">
+                                <div class="flex flex-wrap items-center gap-3">
+                                    ${sourcesHtml}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+
+                    const ttsBtn = cardDiv.querySelector('.tts-btn');
+                    const chevron = cardDiv.querySelector('.chevron-icon');
+                    const expanded = cardDiv.querySelector('.expanded-content');
+                    let isExpanded = false;
+
+                    cardDiv.addEventListener('click', () => {
+                        isExpanded = !isExpanded;
+                        if (isExpanded) {
+                            expanded.classList.remove('hidden');
+                            chevron.classList.add('rotate-180');
+                            ttsBtn.classList.remove('hidden');
+                        } else {
+                            expanded.classList.add('hidden');
+                            chevron.classList.remove('rotate-180');
+                            ttsBtn.classList.add('hidden');
+                        }
+                    });
+
+                    ttsBtn.addEventListener('click', async (e) => {
+                        e.stopPropagation();
+                        ttsBtn.classList.add('animate-pulse', 'text-white');
+                        try {
+                            const textToRead = decodeURIComponent(ttsBtn.getAttribute('data-text'));
+                            const ttsPayload = {
+                                contents: [{ parts: [{ text: `Leia de forma informativa: ${textToRead}` }] }],
+                                generationConfig: {
+                                    responseModalities: ["AUDIO"],
+                                    speechConfig: {
+                                        voiceConfig: { prebuiltVoiceConfig: { voiceName: "Charon" } }
+                                    }
+                                },
+                                model: "gemini-2.5-flash-preview-tts"
+                            };
+
+                            const ttsUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
+                            const resp = await fetchWithRetry(ttsUrl, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(ttsPayload)
+                            });
+
+                            const resJson = await resp.json();
+                            const part = resJson?.candidates?.[0]?.content?.parts?.[0];
+                            const audioData = part?.inlineData?.data;
+                            const mimeType = part?.inlineData?.mimeType;
+
+                            if (audioData && mimeType && mimeType.startsWith("audio/")) {
+                                const sampleRateMatch = mimeType.match(/rate=(\d+)/);
+                                const sampleRate = sampleRateMatch ? parseInt(sampleRateMatch[1], 10) : 24000;
+                                const pcmData = base64ToArrayBuffer(audioData);
+                                const pcm16 = new Int16Array(pcmData);
+                                const wavBlob = pcmToWav(pcm16, sampleRate);
+                                const audioUrl = URL.createObjectURL(wavBlob);
+                                
+                                const audio = new Audio(audioUrl);
+                                audio.onended = () => ttsBtn.classList.remove('animate-pulse', 'text-white');
+                                audio.play();
+                            } else {
+                                ttsBtn.classList.remove('animate-pulse', 'text-white');
+                            }
+                        } catch (err) {
+                            console.error(err);
+                            ttsBtn.classList.remove('animate-pulse', 'text-white');
+                        }
+                    });
+
+                } else {
+                    const statusEl = cardDiv.querySelector('.card-status');
+                    if (statusEl) await displayStandardError(statusEl);
+                    else cardDiv.innerHTML = `<div class="p-4 text-neutral-300 text-sm">Aconteceu um erro<br><span class="text-xs text-neutral-400">Verifique o funcionamento da internet e recarregue a página</span></div>`;
+                }
+            } catch (err) {
+                console.error(err);
+                const statusEl = cardDiv.querySelector('.card-status');
+                if (statusEl) await displayStandardError(statusEl);
+                else cardDiv.innerHTML = `<div class="p-4 text-neutral-300 text-sm">Aconteceu um erro<br><span class="text-xs text-neutral-400">Verifique o funcionamento da internet e recarregue a página</span></div>`;
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            initializeApplicationData();
+        });
+    </script>
+</body>
+</html>
